@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { captureAudio, createAudioPipeline, type AudioPipeline, type AudioSource } from './audio';
 import { mergeCaption, parseServerEvent, type AppConfig, type Caption, type SessionPhase } from '../shared/protocol';
 import { exportSrt } from '../shared/subtitles';
+import { appPath } from './paths';
 
 type IconName = 'wave' | 'play' | 'stop' | 'screen' | 'meeting' | 'mic' | 'arrow' | 'popout' | 'download' | 'check' | 'close' | 'help';
 function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
@@ -65,7 +66,7 @@ export function App() {
 
   async function refreshConfig(signal?: AbortSignal) {
     try {
-      const response = await fetch('/api/config', { signal });
+      const response = await fetch(appPath('api/config'), { signal });
       if (!response.ok) throw new Error();
       const value: unknown = await response.json();
       if (!value || typeof value !== 'object' || !('configured' in value) || typeof value.configured !== 'boolean' || !('authenticated' in value) || typeof value.authenticated !== 'boolean') throw new Error();
@@ -122,7 +123,7 @@ export function App() {
       // The browser picker must open directly from the user's click.
       streams = await captureAudio(source, source !== 'microphone' && includeMic);
       if (generation !== generationRef.current) { streams.forEach(s => s.getTracks().forEach(t => t.stop())); return; }
-      const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/live`);
+      const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}${appPath('api/live')}`);
       const resource: Resources = { streams, socket, pipeline: null, startingPipeline: false };
       resourceRef.current = resource;
       setCaptions([]); setInterim(''); setUsage({ audioSeconds: 0, estimatedUsd: 0 }); autoScroll.current = true;
@@ -238,7 +239,7 @@ export function App() {
   async function login(event: FormEvent) {
     event.preventDefault(); setLoggingIn(true); setError('');
     try {
-      const response = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: accessCode }) });
+      const response = await fetch(appPath('api/login'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: accessCode }) });
       if (!response.ok) { const value = await response.json() as { message: string }; throw new Error(value.message); }
       setAccessCode(''); await refreshConfig();
     } catch (caught) { setError(caught instanceof Error ? caught.message : '登入失敗，請重試。'); }

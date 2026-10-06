@@ -2,6 +2,7 @@ import { config as loadEnv } from 'dotenv';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveApiKey } from './environment';
+import { normalizeBasePath } from '../shared/paths';
 
 export const projectRoot = fileURLToPath(new URL('../', import.meta.url));
 const inheritedKeys = { GEMINI_API_KEY: process.env.GEMINI_API_KEY, GOOGLE_API_KEY: process.env.GOOGLE_API_KEY };
@@ -19,6 +20,8 @@ export const settings = {
   host: process.env.HOST || '127.0.0.1',
   port: boundedNumber('PORT', 3000, 1, 65535),
   accessCode: process.env.APP_ACCESS_CODE || '',
+  basePath: normalizeBasePath(process.env.APP_BASE_PATH || '/'),
+  trustProxy: process.env.TRUST_PROXY === 'true',
   transcriptionModel: process.env.TRANSCRIPTION_MODEL || 'gemini-3.5-transcribe-live',
   translationModel: process.env.TRANSLATION_MODEL || 'gemini-3.5-flash-lite',
   maxSessions: boundedNumber('MAX_CONCURRENT_SESSIONS', 3, 1, 50),

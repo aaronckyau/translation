@@ -1,3 +1,5 @@
+import { appPath } from './paths';
+
 export type AudioSource = 'video' | 'meeting' | 'microphone';
 
 export async function captureAudio(source: AudioSource, includeMic: boolean): Promise<MediaStream[]> {
@@ -41,7 +43,7 @@ export interface AudioPipeline { stop(): Promise<void> }
 export async function createAudioPipeline(streams: MediaStream[], onAudio: (buffer: ArrayBuffer, rms: number) => void): Promise<AudioPipeline> {
   const context = new AudioContext();
   try {
-    await context.audioWorklet.addModule('/pcm-worklet.js');
+    await context.audioWorklet.addModule(appPath('pcm-worklet.js'));
     if (context.state === 'suspended') await context.resume();
     const capture = new AudioWorkletNode(context, 'pcm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
     const sources = streams.map(stream => context.createMediaStreamSource(new MediaStream(stream.getAudioTracks())));

@@ -1,0 +1,31 @@
+name: translation
+services:
+  translation-app:
+    container_name: translation_app
+    build:
+      context: .
+      args:
+        APP_BASE_PATH: /translation/
+    env_file:
+      - .env.production
+    environment:
+      HOST: 0.0.0.0
+      PORT: '8000'
+      APP_BASE_PATH: /translation/
+      TRUST_PROXY: 'true'
+    ports:
+      - '127.0.0.1:5440:8000'
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: local
+      options:
+        max-size: '10m'
+        max-file: '3'

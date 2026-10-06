@@ -97,3 +97,26 @@ npm run build
 
 型別檢查及 19 項自動測試通過，包括空白 `.env.local` 遮住 `.env` 金鑰的回歸測試。瀏覽器已確認開始按鈕啟用；實際影片／Zoom／Teams 收音、長會議連線輪替、浮動字幕及延遲仍需在使用者的獨立桌面瀏覽器驗收。
 # translation
+
+## Contabo VPS 部署
+
+部署目錄 `/root/apps/translation`，Compose project `translation`、service `translation-app`、container `translation_app`。只綁定 `127.0.0.1:5440:8000`，外部由既有 HTTPS Nginx 提供 `/translation/`。
+
+前端建置時設定 `APP_BASE_PATH=/translation/`，API、WebSocket、worklet 和資源網址都帶這個 prefix。`deploy/nginx-location.conf` 的 `proxy_pass` 帶尾斜線，移除 prefix 後轉送 Express 根路徑；不要再由 Express 加一次 prefix。登入 cookie 限定於 `/translation/`。
+
+安全建立權限 `600` 的 `.env.production`，放入 `GEMINI_API_KEY`、至少 16 字元的 `APP_ACCESS_CODE`、轉錄及翻譯模型名稱。不要輸出、提交或把 env 放進 Docker image。Compose 的 `TRUST_PROXY=true` 只適用於這個單一 Nginx 代理；Nginx 覆寫 `X-Forwarded-For`，應用程式按真實來源 IP 限制登入嘗試。
+
+```sh
+docker compose up -d --build
+curl --fail http://127.0.0.1:5440/api/health
+```
+
+Docker build 會執行測試、型別檢查、production build 和 `check:deployment`（使用假金鑰，不呼叫 Gemini）。健康檢查只確認 HTTP 服務及金鑰已設定，不代表 Gemini 配額可用。
+
+修改既有 Nginx 前先建立時間戳備份，只加入 translation locations；`nginx -t` 通過才 reload。公開健康檢查為 `https://www.4mstrategy.com/translation/api/health`。部署或重啟會結束當前翻譯連線，並需要重新登入。
+
+此 App 沒有資料庫、uploads 或音訊／字幕檔案。應用程式僅輸出服務狀態到 stdout，Docker `local` 日誌保存在 host，限制每檔 10 MB、最多 3 檔。容器以非 root、唯讀 filesystem 執行，臨時檔使用獨立 tmpfs；將來新增檔案資料時必須另掛 host／named volume。
+
+部署前確認 port 空閒、磁碟和記憶體，記錄其他容器 ID。部署後檢查 Git SHA、容器 health、internal/public HTTP、登入、WebSocket 及其他容器 ID 未改變；不要 rebuild 或 restart 其他 Compose projects。
+
+技術依據：[Vite base path](https://vite.dev/guide/build#public-base-path)、[Nginx WebSocket proxy](https://nginx.org/en/docs/http/websocket.html)。

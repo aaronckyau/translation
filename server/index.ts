@@ -19,6 +19,8 @@ const active = new Set<SubtitleSession>();
 const loginAttempts = new Map<string, { count: number; since: number }>();
 const loopbackOnly = ['127.0.0.1', 'localhost', '::1'].includes(settings.host);
 app.disable('x-powered-by');
+// Enable only behind the deployment's single, trusted Nginx hop.
+app.set('trust proxy', settings.trustProxy ? 1 : false);
 app.use((req, res, next) => { if (!allowedHost(req, loopbackOnly)) res.sendStatus(403); else next(); });
 app.use((_req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -28,6 +30,9 @@ app.use((_req, res, next) => {
 });
 app.use('/api', express.json({ limit: '2kb' }));
 app.use('/api', (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
+app.get('/api/health', (_req, res) => {
+  res.status(ai ? 200 : 503).json({ status: ai ? 'ok' : 'unconfigured' });
+});
 app.get('/api/config', (req, res) => {
   res.json({
     configured: !!ai,
@@ -39,7 +44,7 @@ app.get('/api/config', (req, res) => {
 });
 app.post('/api/login', (req, res) => {
   if (!sameOrigin(req)) { res.status(403).json({ message: '請從此網站登入。' }); return; }
-  const ip = req.socket.remoteAddress || 'unknown';
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
   const now = Date.now();
   let attempt = loginAttempts.get(ip);
   if (!attempt || now - attempt.since > 15 * 60_000) attempt = { count: 0, since: now };
@@ -50,12 +55,13 @@ app.post('/api/login', (req, res) => {
   loginAttempts.delete(ip);
   // Public hosting is served behind an HTTPS reverse proxy. Never trust arbitrary forwarded IPs.
   const secure = req.headers.origin?.startsWith('https://') ? '; Secure' : '';
-  res.setHeader('Set-Cookie', `subtitle_session=${auth.issue()}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200${secure}`);
+  res.setHeader('Set-Cookie', `subtitle_session=${auth.issue()}; HttpOnly; SameSite=Strict; Path=${settings.basePath}; Max-Age=43200${secure}`);
   res.json({ ok: true });
 });
 app.post('/api/logout', (req, res) => {
   if (!sameOrigin(req)) { res.sendStatus(403); return; }
-  res.setHeader('Set-Cookie', 'subtitle_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
+  const secure = req.headers.origin?.startsWith('https://') ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `subtitle_session=; HttpOnly; SameSite=Strict; Path=${settings.basePath}; Max-Age=0${secure}`);
   res.json({ ok: true });
 });
 app.use('/api', (_req, res) => { res.status(404).json({ message: '找不到此功能。' }); });
