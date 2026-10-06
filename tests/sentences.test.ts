@@ -22,3 +22,9 @@ test('unpunctuated speech is bounded at word boundaries without losing any words
   assert.ok(groups.every(group => group.split(' ').length <= 40));
   assert.equal(groups.join(' '), source);
 });
+
+test('provider punctuation without spaces still separates sentences and preserves acronyms', () => {
+  assert.deepEqual(sentenceGroups('First sentence.Second sentence.Third sentence!Fourth sentence?Fifth sentence in the U.S. office.'), [
+    'First sentence. Second sentence.', 'Third sentence! Fourth sentence?', 'Fifth sentence in the U.S. office.',
+  ]);
+});

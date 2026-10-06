@@ -8,7 +8,8 @@ const endsWithTitle = (text: string): boolean => /\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|S
 /** At most two sentences per caption, with word-boundary splits for long run-ons. */
 export function sentenceGroups(text: string): string[] {
   const sentences: string[] = [];
-  for (const part of segmenter.segment(text.trim())) {
+  const spaced = text.trim().replace(/([\p{Ll}]{2}[.!?]["'”’)]*)(?=\p{Lu})/gu, '$1 ');
+  for (const part of segmenter.segment(spaced)) {
     const sentence = part.segment.trim();
     if (!sentence) continue;
     const previous = sentences.at(-1);
