@@ -1,0 +1,99 @@
+# 聲譯 · 即時繁體中文字幕
+
+免安裝網頁 App：擷取英文分頁／系統／麥克風音訊，透過 Gemini 即時轉錄並逐句翻譯，提供中英雙語字幕、置頂浮動字幕及 SRT 下載。
+
+## 本機啟動
+
+開發者電腦需 Node.js 22.12 或以上。使用者只需要瀏覽器；正式部署後使用者無須安裝 Node.js。
+
+```powershell
+cd C:\Users\aaron\Documents\translate
+npm install
+Copy-Item .env.example .env.local
+# 用本機編輯器填寫 .env.local 的 GEMINI_API_KEY，請勿貼到聊天、Git 或前端程式。
+npm run dev
+```
+
+開啟 http://localhost:3000。修改 `.env.local` 後必須重新啟動服務。若 `.env.local` 已存在，保留現有檔案，不要覆寫。
+
+亦支援把金鑰放在 `.env`。金鑰優先使用程序環境變數，其次 `.env.local`，最後 `.env`；空白金鑰欄位會略過，不會遮住下一個來源的有效金鑰。不要把兩個設定檔提交到版本控制。
+
+正式建置及本機驗證：
+
+```powershell
+npm run build
+npm start
+```
+
+## 使用方式
+
+1. 在電腦 Chrome／Edge 播放英文影片或加入會議。
+2. 網上影片／網頁版 Zoom、Teams：選「網上影片」，按開始，再選對應分頁並勾選「分享分頁音訊」。
+3. 桌面版 Zoom、Teams：選「桌面會議」，在 Windows 分享整個螢幕並勾選「分享系統音訊」。選單依作業系統與瀏覽器而異；若沒有音訊選項，改用網頁版會議。系統音訊會包含其他程式的通知及聲音，使用者應選擇適當來源。
+4. 可另外勾選麥克風，以收錄自己的英文發言。系統音訊通常只包含其他與會者。建議使用耳機避免回音；不要把相同聲音重複收錄。
+5. 開啟「浮動字幕」並移動視窗。使用 Document Picture-in-Picture；屬於瀏覽器置頂視窗，非透明穿透桌面覆蓋層。部分全螢幕／手機／瀏覽器環境不支援，回退為本頁字幕。
+6. 停止後等最後幾句字幕完成，再下載 SRT。重新開始或重新整理會清除本頁紀錄。
+
+畫面影像僅用來維持瀏覽器分享授權，不會傳送到 Gemini。只有 PCM 音訊及翻譯所需的短文字前文送到 Gemini。伺服器不寫入錄音或字幕；Google 如何處理輸入資料依你的 API 帳戶方案與條款而定。
+
+## 模型及費用
+
+- 英文轉錄：`gemini-3.5-transcribe-live`，16 kHz、單聲道、16-bit little-endian PCM，約 100 ms 一包。
+- 文字翻譯：`gemini-3.5-flash-lite`，繁體中文及香港常用詞、最多四句有限前文、minimal thinking。
+- 支援暫定英文及最終英文轉錄；中文於片段完成後翻譯，避免反覆改譯暫定文字。長句持續發言時每約 6 秒要求完成片段，無聲約 650 ms 亦會送出完成訊號。
+- 不能保證固定 1–3 秒延遲；包含語句切分、轉錄、翻譯及網絡延遲，需以實際帳戶及音訊量測。
+- 9 分鐘更新轉錄連線，更新時最多暫存 10 秒音訊。斷線最多嘗試恢復 3 次；持續失敗會停止並明確顯示。
+- 預設每次 120 分鐘、最多 3 個同時使用者。可透過環境變數調整。
+- UI 費用為估算：音訊按 PCM 時長×25 tokens/秒；轉錄文字按約 4 字元/token 估算；翻譯採 API 回傳 token 數。依 2026-10-06 官方標準費率計算，不等於帳單，換其他模型後估算也可能不準確。
+- 以官方一般轉錄假設及短前文估算，10 分鐘約 US$0.10–0.15。重連重試及不同語速會影響實際費用。
+- SRT 時間戳記按音訊收到及轉錄完成時估算；不提供精確字詞定位，亦不會讀取 YouTube 或會議的原始影片時間。
+
+模型名稱可在 `.env.local` 更改；轉錄模型必須支援 Transcribe Live 的 TEXT 模式及相同事件格式。金鑰存在只表示伺服器已設定，不代表 API 權限、配額及模型可用性已通過真實測試。
+
+官方參考：
+
+- [即時轉錄](https://ai.google.dev/gemini-api/docs/live-api/live-transcribe)
+- [Flash-Lite](https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite)
+- [Gemini API 定價](https://ai.google.dev/gemini-api/docs/pricing)
+- [瀏覽器分享音訊](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getDisplayMedia)
+- [Document Picture-in-Picture](https://developer.chrome.com/docs/web-platform/document-picture-in-picture)
+
+## 正式網址部署
+
+專案包含可部署的 Node.js 服務；目前沒有公開網址。部署時：
+
+1. 在 Node.js 主機執行 `npm ci`、`npm run build`、`npm start`。
+2. 設定 `HOST=0.0.0.0`、伺服器端 `GEMINI_API_KEY`，以及至少 16 字元的隨機 `APP_ACCESS_CODE`。對外綁定但沒有密碼時服務會拒絕啟動。
+3. 使用 HTTPS 反向代理，支援 `/api/live` WebSocket Upgrade，並保留原始 Host。瀏覽器收音與浮動字幕需要 secure context。
+4. 非 API 頁面只提供建置檔案，`.env`、原始碼及私密檔案不會由正式服務提供。金鑰不會傳到瀏覽器。
+5. 透過共享使用密碼登入，cookie 為 HttpOnly／SameSite=Strict。這是私人試用版入口，未包含個人帳戶、付款、個人配額及多伺服器共享狀態。公開商業服務需要再實作這些功能。
+
+前端、API 與 WebSocket 必須同源。共享密碼驗證的 session 簽名在服務重啟後失效。已有的串流會於離線／停止／用量上限時釋放。不要在公共網絡部署開發模式。
+
+## 檢查及真實驗收
+
+```powershell
+npm run typecheck
+npm test
+npm run build
+```
+
+自動測試涵蓋 16／44.1／48 kHz 音訊轉換、立體聲混合、字幕更新、SRT、錯誤遮罩、登入及來源檢查、翻譯顺序／取消、模型連線輪替及停止流程。測試中的模擬 Gemini 回應只用於測試，App 沒有假翻譯模式。
+
+設定金鑰後需人工驗收：
+
+- 播放英文影片，核對否定句、數字、姓名及術語是否保留。
+- 以秒錶測量聲音到中文顯示的延遲；不中斷發言及背景噪音亦要測試。
+- 在 Zoom／Teams 核對對方聲音及自己的麥克風選項，避免重複收音。
+- 持續至少 12 分鐘，確認工作階段輪替及音訊接續。
+- 取消分享、停止／重啟、關閉浮動視窗、拔除音訊設備、暫時斷網及配額錯誤。
+- 比較本次估算與 Gemini 實際用量；字幕預覽／API 測試不能代替真實音訊品質驗收。
+
+目前缺少金鑰時，畫面會顯示服務尚未設定並停用開始按鈕，不會假裝完成翻譯。
+
+### 2026-10-06 真實 API 驗證
+
+已使用設定的 Gemini 帳戶確認兩個預設模型可用，並通過文字翻譯及後端即時音訊整條流程測試。測試為自行產生的約 4.87 秒英文語音，成功得到英文轉錄及繁體中文字幕，保留上午 10:00 和「切勿分享密碼」的原意。未收錄使用者麥克風或私人會議。
+
+型別檢查及 19 項自動測試通過，包括空白 `.env.local` 遮住 `.env` 金鑰的回歸測試。瀏覽器已確認開始按鈕啟用；實際影片／Zoom／Teams 收音、長會議連線輪替、浮動字幕及延遲仍需在使用者的獨立桌面瀏覽器驗收。
+# translation
