@@ -28,6 +28,7 @@ export class SubtitleSession {
   private boundaryMs = 0;
   private captionId = 0;
   private previewGroupIndex = 0;
+  private awaitingFinalTranscript = false;
   private pending = new Map<number, Caption>();
   private lastAudioAt = Date.now();
   private timers = new Set<ReturnType<typeof setTimeout>>();
@@ -49,7 +50,13 @@ export class SubtitleSession {
       result => { this.translationInput += result.inputTokens; this.translationOutput += result.outputTokens; this.usage(); });
     this.monitor = setInterval(() => {
       if (!this.closed && !this.finishing && Date.now() - this.lastAudioAt > 30_000) this.fail('已停止收到音訊，請重新選擇聲音來源。');
-      if (this.finishing && ((Date.now() - this.finishStartedAt > 2500 && !this.queue.busy) || Date.now() - this.finishStartedAt > 16_000)) this.complete();
+      if (this.finishing) {
+        const elapsed = Date.now() - this.finishStartedAt;
+        if (elapsed > 16_000) {
+          if (this.awaitingFinalTranscript) this.emit({ type: 'error', message: '最後一段語音未能及時確認，字幕紀錄可能未完整。', fatal: false });
+          this.complete();
+        } else if (elapsed > 2500 && !this.awaitingFinalTranscript && !this.queue.busy) this.complete();
+      }
     }, 250);
     this.later(() => { this.emit({ type: 'error', message: '已達本次使用時間上限。', fatal: false }); this.finish(); }, maxMinutes * 60_000);
   }
@@ -140,6 +147,7 @@ export class SubtitleSession {
   }
   private message(message: TranscriptMessage): void {
     if (message.interim?.trim()) {
+      this.awaitingFinalTranscript = true;
       const groups = sentenceGroups(message.interim.trim().slice(0, 6000));
       const english = groups.at(-1)!;
       if (this.previewGroupIndex !== groups.length - 1) this.preview.reset();
@@ -149,6 +157,7 @@ export class SubtitleSession {
     }
     const english = message.final?.trim().slice(0, 6000);
     if (english) {
+      this.awaitingFinalTranscript = false;
       this.preview.reset();
       this.previewGroupIndex = 0;
       this.retries = 0;

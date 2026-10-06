@@ -193,3 +193,19 @@ test('stop drains the last translation before closing, and rejects new audio', a
     assert.equal(f.session.isClosed, true);
   } finally { f.session.dispose(); }
 });
+
+test('stop waits for an outstanding final transcript beyond the initial grace period', async () => {
+  const f = fixture();
+  try {
+    await f.session.start();
+    f.session.audio(Buffer.alloc(3200));
+    f.callbacks[0]!.message({ interim: 'Please confirm the final figures' });
+    f.session.finish();
+    await new Promise(resolve => setTimeout(resolve, 2800));
+    assert.equal(f.done, false, 'pending recognition must not be mistaken for an empty translation queue');
+    f.callbacks[0]!.message({ final: 'Please confirm the final figures. Thank you for joining.' });
+    await new Promise(resolve => setTimeout(resolve, 500));
+    assert.ok(f.events.some(event => event.type === 'caption' && event.caption.translationState === 'done' && event.caption.english.includes('Thank you')));
+    assert.equal(f.done, true);
+  } finally { f.session.dispose(); }
+});
