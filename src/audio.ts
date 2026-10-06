@@ -2,6 +2,24 @@ import { appPath } from './paths';
 
 export type AudioSource = 'video' | 'meeting' | 'microphone';
 
+export class AudioStartupError extends Error {}
+
+// Activate Web Audio in the start click, before the picker and network round trip.
+export function prepareAudioContext(): AudioContext {
+  const context = new AudioContext();
+  if (context.state === 'suspended') void context.resume().catch(() => {});
+  return context;
+}
+
+async function waitForAudioStartup<T>(promise: Promise<T>, message: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([promise, new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => reject(new AudioStartupError(message)), 5000);
+    })]);
+  } finally { if (timeout) clearTimeout(timeout); }
+}
+
 export async function captureAudio(source: AudioSource, includeMic: boolean): Promise<MediaStream[]> {
   if (!window.isSecureContext || !navigator.mediaDevices) throw new Error('請使用 HTTPS 網站或 localhost 開啟翻譯。');
   const streams: MediaStream[] = [];
@@ -15,6 +33,7 @@ export async function captureAudio(source: AudioSource, includeMic: boolean): Pr
         systemAudio: 'include' | 'exclude';
         selfBrowserSurface: 'exclude';
         surfaceSwitching: 'exclude';
+        controller?: { setFocusBehavior(value: 'focus-capturing-application'): void };
       } = {
         video: { displaySurface: source === 'video' ? 'browser' : 'monitor' },
         audio: { suppressLocalAudioPlayback: false },
@@ -22,6 +41,17 @@ export async function captureAudio(source: AudioSource, includeMic: boolean): Pr
         selfBrowserSurface: 'exclude',
         surfaceSwitching: 'exclude',
       };
+      const Controller = (window as Window & {
+        CaptureController?: new () => { setFocusBehavior(value: 'focus-capturing-application'): void };
+      }).CaptureController;
+      if (Controller?.prototype.setFocusBehavior) {
+        try {
+          const controller = new Controller();
+          // Set this before the picker; setting it after sharing a monitor can throw.
+          controller.setFocusBehavior('focus-capturing-application');
+          options.controller = controller;
+        } catch { /* Optional focus control must not prevent capture in older browsers. */ }
+      }
       const display = await navigator.mediaDevices.getDisplayMedia(options);
       streams.push(display);
       if (!display.getAudioTracks().length) throw new Error(source === 'video' ? '未收到分頁音訊。請重新選擇影片分頁，並勾選「分享分頁音訊」。' : '未收到音訊。請選擇整個螢幕並勾選「分享系統音訊」，或改用網頁版會議的分頁音訊。');
@@ -40,11 +70,11 @@ export async function captureAudio(source: AudioSource, includeMic: boolean): Pr
 }
 
 export interface AudioPipeline { stop(): Promise<void> }
-export async function createAudioPipeline(streams: MediaStream[], onAudio: (buffer: ArrayBuffer, rms: number) => void): Promise<AudioPipeline> {
-  const context = new AudioContext();
+export async function createAudioPipeline(streams: MediaStream[], onAudio: (buffer: ArrayBuffer, rms: number) => void, context = new AudioContext()): Promise<AudioPipeline> {
   try {
-    await context.audioWorklet.addModule(appPath('pcm-worklet.js'));
-    if (context.state === 'suspended') await context.resume();
+    await waitForAudioStartup(context.audioWorklet.addModule(appPath('pcm-worklet.js')), '收音模組載入逾時。請重新整理後再試。');
+    if (context.state !== 'running') await waitForAudioStartup(context.resume(), '瀏覽器暫停了收音。請回到翻譯頁，再按開始翻譯。');
+    if (context.state !== 'running') throw new AudioStartupError('收音尚未啟動。請回到翻譯頁，再按開始翻譯。');
     const capture = new AudioWorkletNode(context, 'pcm-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
     const sources = streams.map(stream => context.createMediaStreamSource(new MediaStream(stream.getAudioTracks())));
     sources.forEach(source => source.connect(capture));
@@ -71,8 +101,8 @@ export async function createAudioPipeline(streams: MediaStream[], onAudio: (buff
         capture.disconnect();
         mute.disconnect();
         capture.port.close();
-        await context.close();
+        if (context.state !== 'closed') await context.close().catch(() => {});
       },
     };
-  } catch (error) { await context.close(); throw error; }
+  } catch (error) { if (context.state !== 'closed') await context.close().catch(() => {}); throw error; }
 }

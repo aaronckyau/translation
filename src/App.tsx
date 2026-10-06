@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { captureAudio, createAudioPipeline, type AudioPipeline, type AudioSource } from './audio';
+import { AudioStartupError, captureAudio, createAudioPipeline, prepareAudioContext, type AudioPipeline, type AudioSource } from './audio';
 import { mergeCaption, parseServerEvent, type AppConfig, type Caption, type SessionPhase } from '../shared/protocol';
 import { exportSrt } from '../shared/subtitles';
 import { appPath } from './paths';
@@ -23,7 +23,7 @@ function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 }
 function elapsed(seconds: number): string { return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`; }
-interface Resources { streams: MediaStream[]; socket: WebSocket | null; pipeline: AudioPipeline | null; startingPipeline: boolean }
+interface Resources { streams: MediaStream[]; socket: WebSocket | null; pipeline: AudioPipeline | null; context: AudioContext; startingPipeline: boolean }
 const modes: Array<{ id: AudioSource; name: string; detail: string; icon: IconName }> = [
   { id: 'video', name: '網上影片', detail: 'YouTube、網頁版會議', icon: 'screen' },
   { id: 'meeting', name: '桌面會議', detail: 'Zoom、Teams 系統音訊', icon: 'meeting' },
@@ -91,6 +91,7 @@ export function App() {
     resourceRef.current = null;
     if (closeSocket) resource.socket?.close();
     await resource.pipeline?.stop();
+    if (!resource.pipeline && resource.context.state !== 'closed') await resource.context.close().catch(() => {});
     resource.streams.forEach(stream => stream.getTracks().forEach(track => track.stop()));
     setLevel(0);
   }
@@ -102,19 +103,23 @@ export function App() {
     setError(''); setPhase('connecting'); setStatus('請選擇聲音來源'); setQuiet(false);
     let streams: MediaStream[] = [];
     try {
+      const context = prepareAudioContext();
+      const resource: Resources = { streams, socket: null, pipeline: null, context, startingPipeline: false };
+      resourceRef.current = resource;
       // The browser picker must open directly from the user's click.
       streams = await captureAudio(source, source !== 'microphone' && includeMic);
       if (generation !== generationRef.current) { streams.forEach(s => s.getTracks().forEach(t => t.stop())); return; }
       const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}${appPath('api/live')}`);
-      const resource: Resources = { streams, socket, pipeline: null, startingPipeline: false };
-      resourceRef.current = resource;
+      resource.streams = streams;
+      resource.socket = socket;
       setCaptions([]); setInterim(''); setPreview(null); setUsage({ audioSeconds: 0, estimatedUsd: 0 }); autoScroll.current = true;
       let lastVoice = Date.now();
       let speechActive = false;
       let silentSamples = 0;
+      let receivedAudio = false;
       const connectTimeout = setTimeout(() => {
-        if (generation !== generationRef.current || resource.pipeline) return;
-        setError('翻譯連線逾時，請稍後重試。');
+        if (generation !== generationRef.current || receivedAudio) return;
+        setError('尚未收到音訊。請回到翻譯頁重新開始，並確認已分享音訊。');
         void stop(true);
       }, 20_000);
       streams.forEach(s => s.getTracks().forEach(t => t.addEventListener('ended', () => {
@@ -127,13 +132,18 @@ export function App() {
         if (!message) return;
         switch (message.type) {
           case 'status':
-            setPhase(message.phase); setStatus(message.message);
+            setPhase(message.phase === 'live' && !receivedAudio ? 'connecting' : message.phase);
+            setStatus(message.phase === 'live' && !receivedAudio ? '正在啟動收音…' : message.message);
             if (message.phase === 'live' && !resource.pipeline && !resource.startingPipeline && !intentionalStop.current) {
               resource.startingPipeline = true;
               void createAudioPipeline(streams, (buffer, rms) => {
                 if (generation !== generationRef.current || socket.readyState !== WebSocket.OPEN) return;
                 if (socket.bufferedAmount > 320_000) { setError('網絡速度跟不上音訊傳送，請重新開始。'); void stop(true); return; }
                 socket.send(buffer);
+                if (!receivedAudio) {
+                  receivedAudio = true; clearTimeout(connectTimeout);
+                  if (!intentionalStop.current) { setPhase('live'); setStatus('正在聆聽及翻譯'); }
+                }
                 setLevel(Math.min(1, rms * 8));
                 const durationMs = buffer.byteLength / 32;
                 if (rms > 0.007) { lastVoice = Date.now(); silentSamples = 0; speechActive = true; setQuiet(false); }
@@ -142,11 +152,14 @@ export function App() {
                   if (speechActive && silentSamples > 650) { socket.send(JSON.stringify({ type: 'flush' })); speechActive = false; }
                   if (Date.now() - lastVoice > 10_000) setQuiet(true);
                 }
-              }).then(pipeline => {
-                clearTimeout(connectTimeout);
+              }, context).then(pipeline => {
                 if (generation !== generationRef.current || intentionalStop.current || resourceRef.current !== resource) void pipeline.stop();
                 else resource.pipeline = pipeline;
-              }).catch(() => { setError('無法啟動收音，請檢查瀏覽器權限後重試。'); void stop(true); });
+              }).catch(caught => {
+                if (generation !== generationRef.current || resourceRef.current !== resource || intentionalStop.current) return;
+                setError(caught instanceof AudioStartupError ? caught.message : '無法啟動收音，請檢查瀏覽器權限後重試。');
+                void stop(true);
+              });
             }
             if (message.phase === 'finishing') { intentionalStop.current = true; void resource.pipeline?.stop(); streams.forEach(s => s.getTracks().forEach(t => t.stop())); }
             if (message.phase === 'stopped') { intentionalStop.current = true; clearTimeout(connectTimeout); void release(false); setInterim(''); setPreview(null); }
