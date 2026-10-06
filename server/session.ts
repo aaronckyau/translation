@@ -202,6 +202,8 @@ export class SubtitleSession {
   finish(): void {
     if (this.closed || this.finishing) return;
     this.finishing = true;
+    // Audio can reach the provider before either its interim or final text arrives.
+    if (this.audioBytes / 32 > this.boundaryMs) this.awaitingFinalTranscript = true;
     this.preview.reset();
     this.finishStartedAt = Date.now();
     this.emit({ type: 'status', phase: 'finishing', message: '正在完成最後幾句字幕…' });

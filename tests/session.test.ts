@@ -209,3 +209,20 @@ test('stop waits for an outstanding final transcript beyond the initial grace pe
     assert.equal(f.done, true);
   } finally { f.session.dispose(); }
 });
+
+test('stop also waits for trailing audio whose interim transcript has not arrived yet', async () => {
+  const f = fixture();
+  try {
+    await f.session.start();
+    f.session.audio(Buffer.alloc(3200));
+    f.callbacks[0]!.message({ final: 'The first two sentences are complete.' });
+    f.session.audio(Buffer.alloc(3200));
+    f.session.finish();
+    await new Promise(resolve => setTimeout(resolve, 2800));
+    assert.equal(f.done, false, 'trailing audio may precede both interim and final provider events');
+    f.callbacks[0]!.message({ final: 'This is the last sentence.' });
+    await new Promise(resolve => setTimeout(resolve, 500));
+    assert.ok(f.events.some(event => event.type === 'caption' && event.caption.translationState === 'done' && event.caption.english === 'This is the last sentence.'));
+    assert.equal(f.done, true);
+  } finally { f.session.dispose(); }
+});
