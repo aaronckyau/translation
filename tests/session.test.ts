@@ -4,6 +4,7 @@ import { SubtitleSession, type GatewayCallbacks, type Transcriber } from '../ser
 import type { ServerEvent } from '../shared/protocol';
 import type { Translator } from '../server/translation';
 import { exportSrt } from '../shared/subtitles';
+import { updateCaptionRecords, parseServerEvent, type Caption } from '../shared/protocol';
 
 const translator: Translator = async english => ({ text: `翻譯：${english}`, inputTokens: 100, outputTokens: 50 });
 function fixture(translate = translator) {
@@ -21,6 +22,29 @@ function fixture(translate = translator) {
   return { session, callbacks, events, audio, get closes() { return closes; }, get ends() { return ends; }, get done() { return done; } };
 }
 
+function records(events: ServerEvent[]): Caption[] {
+  return events.reduce<Caption[]>((current, value) => {
+    const event = parseServerEvent(JSON.parse(JSON.stringify(value)));
+    return event?.type === 'caption' || event?.type === 'caption-remove' ? updateCaptionRecords(current, event) : current;
+  }, []);
+}
+
+test('subtitle records grow while live previews arrive even if the provider has not finalized speech', async () => {
+  const f = fixture();
+  try {
+    await f.session.start();
+    f.callbacks[0]!.message({ interim: 'The meeting starts now. Please review the budget.' });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    f.callbacks[0]!.message({ interim: 'The meeting starts now. Please review the budget. Do not share your password.' });
+    await new Promise(resolve => setTimeout(resolve, 1300));
+    const rows = records(f.events);
+    assert.equal(rows.length, 2, 'the frontend subtitle count must not remain zero throughout continuous speech');
+    assert.equal(rows[0]!.english, 'The meeting starts now. Please review the budget.');
+    assert.ok(rows.every(record => record.chinese), 'translated previews must also be visible in subtitle records');
+    assert.ok(rows.every(record => record.provisional));
+  } finally { f.session.dispose(); }
+});
+
 test('a cumulative live paragraph previews only the current one or two sentences', async () => {
   const requested: string[] = [];
   const f = fixture(async english => { requested.push(english); return translator(english, [], new AbortController().signal); });
@@ -28,7 +52,7 @@ test('a cumulative live paragraph previews only the current one or two sentences
     await f.session.start();
     f.callbacks[0]!.message({ interim: 'First sentence. Second sentence. Third sentence. Fourth sentence. Fifth sentence is ongoing' });
     await new Promise(resolve => setTimeout(resolve, 10));
-    assert.deepEqual(requested, ['Fifth sentence is ongoing']);
+    assert.deepEqual([...requested].sort(), ['First sentence. Second sentence.', 'Third sentence. Fourth sentence.', 'Fifth sentence is ongoing'].sort());
     assert.ok(f.events.some(event => event.type === 'interim' && event.english === 'Fifth sentence is ongoing'));
     assert.ok(f.events.some(event => event.type === 'preview' && event.english === 'Fifth sentence is ongoing'));
     assert.equal(f.ends, 0);
@@ -62,11 +86,13 @@ test('a long final paragraph becomes ordered short captions with the full transc
 test('advancing to a new sentence group cancels the previous preview and ignores its late response', async () => {
   let resolveOld: ((result: { text: string; inputTokens: number; outputTokens: number }) => void) | undefined;
   let aborted = false;
+  let firstGroupRequests = 0;
   const f = fixture(async (english, _context, signal) => {
-    if (english === 'First sentence. Second sentence.') {
+    if (english === 'First sentence. Second sentence.' && firstGroupRequests++ === 0) {
       signal.addEventListener('abort', () => { aborted = true; }, { once: true });
       return new Promise(resolve => { resolveOld = resolve; });
     }
+    if (english === 'First sentence. Second sentence.') return { text: '第一句。第二句。', inputTokens: 10, outputTokens: 8 };
     return { text: '這是第三句。', inputTokens: 10, outputTokens: 8 };
   });
   try {
@@ -78,6 +104,7 @@ test('advancing to a new sentence group cancels the previous preview and ignores
     await new Promise(resolve => setTimeout(resolve, 1250));
     assert.equal(f.events.some(event => event.type === 'preview' && event.chinese === '過時的前兩句'), false);
     assert.ok(f.events.some(event => event.type === 'preview' && event.chinese === '這是第三句。'));
+    assert.equal(records(f.events).some(caption => caption.chinese === '過時的前兩句'), false);
   } finally { f.session.dispose(); }
 });
 
@@ -91,12 +118,12 @@ test('real-time transcript events produce one pending then one translated subtit
     await new Promise(resolve => setTimeout(resolve, 5));
     assert.equal(f.audio.length, 1);
     assert.ok(f.events.some(e => e.type === 'interim' && e.english === 'This is'));
-    const captions = f.events.filter(e => e.type === 'caption');
+    const captions = f.events.flatMap(e => e.type === 'caption' && !e.caption.provisional ? [e.caption] : []);
     assert.equal(captions.length, 2);
-    assert.equal(captions[0]!.caption.translationState, 'pending');
-    assert.equal(captions[1]!.caption.translationState, 'done');
-    assert.equal(captions[1]!.caption.endMs, 100);
-    assert.equal(captions[1]!.caption.id, captions[0]!.caption.id);
+    assert.equal(captions[0]!.translationState, 'pending');
+    assert.equal(captions[1]!.translationState, 'done');
+    assert.equal(captions[1]!.endMs, 100);
+    assert.equal(captions[1]!.id, captions[0]!.id);
     assert.ok(f.events.some(e => e.type === 'usage' && e.audioSeconds === 0.1 && e.estimatedUsd > 0));
   } finally { f.session.dispose(); }
 });
@@ -118,7 +145,63 @@ test('Chinese preview arrives while the speaker continues, before the final tran
     await new Promise(resolve => setTimeout(resolve, 10));
     const previews = f.events.filter(event => (event as { type: string }).type === 'preview');
     assert.equal(previews.length, 1, 'ongoing speech must not wait for the final transcript before displaying Chinese');
-    assert.equal(f.events.some(event => event.type === 'caption'), false, 'previews must not enter committed subtitles');
+    const rows = records(f.events);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.provisional, true, 'live records must remain distinguishable from authoritative subtitles');
+  } finally { f.session.dispose(); }
+});
+
+test('the final transcript corrects a provisional negation in the same record without duplication', async () => {
+  const f = fixture();
+  try {
+    await f.session.start();
+    f.callbacks[0]!.message({ interim: 'Do share your password' });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    const before = records(f.events);
+    assert.equal(before.length, 1);
+    assert.equal(before[0]!.provisional, true);
+    f.callbacks[0]!.message({ final: 'Do not share your password.' });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    const after = records(f.events);
+    assert.equal(after.length, 1);
+    assert.equal(after[0]!.id, before[0]!.id);
+    assert.equal(after[0]!.english, 'Do not share your password.');
+    assert.match(after[0]!.chinese, /Do not/);
+    assert.equal(after[0]!.provisional, false);
+    assert.doesNotMatch(exportSrt(after, true), /暫定字幕/);
+  } finally { f.session.dispose(); }
+});
+
+test('a revised final removes excess draft groups so they cannot remain in the record or SRT', async () => {
+  const f = fixture();
+  try {
+    await f.session.start();
+    f.callbacks[0]!.message({ interim: 'First sentence. Second sentence. This extra sentence was mistaken.' });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(records(f.events).length, 2);
+    f.callbacks[0]!.message({ final: 'First sentence. Second sentence.' });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    const rows = records(f.events);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.provisional, false);
+    assert.doesNotMatch(exportSrt(rows, true), /extra sentence/);
+  } finally { f.session.dispose(); }
+});
+
+test('losing the provider keeps already displayed live translations as explicitly provisional records', async () => {
+  const f = fixture();
+  try {
+    await f.session.start();
+    f.callbacks[0]!.message({ interim: 'Please review the budget.' });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    f.callbacks[0]!.error(new Error('provider unavailable'));
+    const rows = records(f.events);
+    assert.equal(f.done, true);
+    assert.equal(rows.length, 1);
+    assert.ok(rows[0]!.chinese);
+    assert.equal(rows[0]!.provisional, true);
+    assert.match(exportSrt(rows, true), /［暫定字幕］/);
+    assert.match(exportSrt(rows, true), /Please review the budget/);
   } finally { f.session.dispose(); }
 });
 

@@ -3,6 +3,7 @@ import { providerError } from './security';
 import { TranslationQueue, type Translator } from './translation';
 import { PreviewTranslator } from './preview';
 import { sentenceGroups } from '../shared/sentences';
+import { CaptionHistory } from './caption-history';
 
 export interface TranscriptMessage { interim?: string; final?: string; goAway?: boolean }
 export interface Transcriber { sendAudio(data: Buffer): void; endAudio(): void; close(): void }
@@ -26,7 +27,7 @@ export class SubtitleSession {
   private translationInput = 0;
   private translationOutput = 0;
   private boundaryMs = 0;
-  private captionId = 0;
+  private history = new CaptionHistory(event => this.emit(event));
   private previewGroupIndex = 0;
   private awaitingFinalTranscript = false;
   private pending = new Map<number, Caption>();
@@ -46,7 +47,7 @@ export class SubtitleSession {
   ) {
     this.queue = new TranslationQueue(translate, error => this.emit({ type: 'error', message: providerError(error), fatal: false }));
     this.preview = new PreviewTranslator(previewTranslate, () => this.queue.recentContext,
-      (english, chinese) => this.emit({ type: 'preview', english, chinese }),
+      (english, chinese) => { this.emit({ type: 'preview', english, chinese }); this.history.preview(english, chinese); },
       result => { this.translationInput += result.inputTokens; this.translationOutput += result.outputTokens; this.usage(); });
     this.monitor = setInterval(() => {
       if (!this.closed && !this.finishing && Date.now() - this.lastAudioAt > 30_000) this.fail('已停止收到音訊，請重新選擇聲音來源。');
@@ -152,6 +153,15 @@ export class SubtitleSession {
       const english = groups.at(-1)!;
       if (this.previewGroupIndex !== groups.length - 1) this.preview.reset();
       this.previewGroupIndex = groups.length - 1;
+      this.history.update(groups, this.boundaryMs, this.audioBytes / 32);
+      const requests = this.history.completedRequests();
+      if (requests.length) {
+        const accepted = this.queue.addBatch(requests.map(request => ({ english: request.english, done: result => {
+          if (result) { this.translationInput += result.inputTokens; this.translationOutput += result.outputTokens; this.usage(); }
+          this.history.translated(request, result);
+        } })));
+        if (!accepted) for (const request of requests) this.history.translated(request, null);
+      }
       this.emit({ type: 'interim', english });
       if (!this.finishing) this.preview.update(english);
     }
@@ -163,33 +173,23 @@ export class SubtitleSession {
       this.retries = 0;
       const endMs = this.audioBytes / 32;
       const groups = sentenceGroups(english);
-      const duration = endMs - this.boundaryMs;
-      const totalLength = groups.reduce((total, group) => total + group.length, 0);
-      let consumed = 0;
-      let startMs = this.boundaryMs;
-      // Provider timestamps cover the whole result; distribute its duration by text length.
-      const captions: Caption[] = groups.map((group, index) => {
-        consumed += group.length;
-        const groupEnd = index === groups.length - 1 ? endMs : this.boundaryMs + duration * consumed / totalLength;
-        const caption: Caption = { id: ++this.captionId, english: group, chinese: '', startMs, endMs: groupEnd, translationState: 'pending' };
-        startMs = groupEnd;
-        return caption;
-      });
+      const captions = this.history.finalize(groups, this.boundaryMs, endMs);
       this.boundaryMs = endMs;
       this.transcriptTokens += Math.ceil(english.length / 4);
       this.emit({ type: 'interim', english: '' });
       for (const caption of captions) {
         this.emit({ type: 'caption', caption });
-        this.pending.set(caption.id, caption);
+        if (caption.translationState === 'pending') this.pending.set(caption.id, caption);
       }
-      const accepted = this.queue.addBatch(captions.map(caption => ({ english: caption.english, done: result => {
+      const untranslated = captions.filter(caption => caption.translationState === 'pending');
+      const accepted = !untranslated.length || this.queue.addBatch(untranslated.map(caption => ({ english: caption.english, done: result => {
         this.pending.delete(caption.id);
         if (result) { this.translationInput += result.inputTokens; this.translationOutput += result.outputTokens; }
         this.emit({ type: 'caption', caption: { ...caption, chinese: result?.text || '', translationState: result ? 'done' : 'error' } });
         this.usage();
       } })));
       if (!accepted) {
-        for (const caption of captions) {
+        for (const caption of untranslated) {
           this.pending.delete(caption.id);
           this.emit({ type: 'caption', caption: { ...caption, translationState: 'error' } });
         }
@@ -216,6 +216,7 @@ export class SubtitleSession {
   }
   private complete(): void {
     if (this.closed) return;
+    this.history.finish();
     for (const caption of this.pending.values()) this.emit({ type: 'caption', caption: { ...caption, translationState: 'error' } });
     this.usage();
     this.emit({ type: 'status', phase: 'stopped', message: '翻譯已停止' });

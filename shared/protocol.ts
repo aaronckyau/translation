@@ -6,12 +6,14 @@ export interface Caption {
   startMs: number;
   endMs: number;
   translationState: 'pending' | 'done' | 'error';
+  provisional?: boolean;
 }
 export type ServerEvent =
   | { type: 'status'; phase: SessionPhase; message: string }
   | { type: 'interim'; english: string }
   | { type: 'preview'; english: string; chinese: string }
   | { type: 'caption'; caption: Caption }
+  | { type: 'caption-remove'; ids: number[] }
   | { type: 'error'; message: string; fatal: boolean }
   | { type: 'usage'; audioSeconds: number; estimatedUsd: number };
 export interface AppConfig {
@@ -30,9 +32,10 @@ export function parseServerEvent(value: unknown): ServerEvent | null {
   if (v.type === 'preview' && typeof v.english === 'string' && typeof v.chinese === 'string' && v.english.length <= 6000 && v.chinese.length <= 6000) return v as unknown as ServerEvent;
   if (v.type === 'error' && typeof v.message === 'string' && typeof v.fatal === 'boolean') return v as unknown as ServerEvent;
   if (v.type === 'usage' && typeof v.audioSeconds === 'number' && Number.isFinite(v.audioSeconds) && typeof v.estimatedUsd === 'number' && Number.isFinite(v.estimatedUsd)) return v as unknown as ServerEvent;
+  if (v.type === 'caption-remove' && Array.isArray(v.ids) && v.ids.length <= 6000 && v.ids.every(id => Number.isSafeInteger(id) && id > 0)) return v as unknown as ServerEvent;
   if (v.type === 'caption' && v.caption && typeof v.caption === 'object') {
     const c = v.caption as Record<string, unknown>;
-    if (Number.isSafeInteger(c.id) && typeof c.english === 'string' && typeof c.chinese === 'string' && typeof c.startMs === 'number' && Number.isFinite(c.startMs) && typeof c.endMs === 'number' && Number.isFinite(c.endMs) && c.endMs >= c.startMs && ['pending', 'done', 'error'].includes(String(c.translationState))) return v as unknown as ServerEvent;
+    if (Number.isSafeInteger(c.id) && typeof c.english === 'string' && typeof c.chinese === 'string' && typeof c.startMs === 'number' && Number.isFinite(c.startMs) && typeof c.endMs === 'number' && Number.isFinite(c.endMs) && c.endMs >= c.startMs && (c.provisional === undefined || typeof c.provisional === 'boolean') && ['pending', 'done', 'error'].includes(String(c.translationState))) return v as unknown as ServerEvent;
   }
   return null;
 }
@@ -41,4 +44,10 @@ export function mergeCaption(captions: Caption[], next: Caption): Caption[] {
   const index = captions.findIndex(c => c.id === next.id);
   if (index === -1) return [...captions, next].sort((a, b) => a.id - b.id);
   return captions.map(c => c.id === next.id ? next : c);
+}
+
+export function updateCaptionRecords(captions: Caption[], event: Extract<ServerEvent, { type: 'caption' | 'caption-remove' }>): Caption[] {
+  if (event.type === 'caption') return mergeCaption(captions, event.caption);
+  const removed = new Set(event.ids);
+  return captions.filter(caption => !removed.has(caption.id));
 }

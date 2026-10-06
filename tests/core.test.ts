@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { IncomingMessage } from 'node:http';
 import { allowedHost, createAuth, providerError, sameOrigin } from '../server/security';
-import { mergeCaption, parseServerEvent, type Caption } from '../shared/protocol';
+import { mergeCaption, parseServerEvent, updateCaptionRecords, type Caption } from '../shared/protocol';
 import { exportSrt, srtTimestamp } from '../shared/subtitles';
 import { TranslationQueue } from '../server/translation';
 
@@ -23,6 +23,10 @@ test('malformed provider events cannot enter subtitle state', () => {
   assert.equal(parseServerEvent({ type: 'usage', audioSeconds: Infinity, estimatedUsd: 1 }), null);
   assert.equal(parseServerEvent({ type: 'status', phase: 'arbitrary', message: '' }), null);
   assert.equal(parseServerEvent({ type: 'caption', caption })?.type, 'caption');
+  assert.equal(parseServerEvent({ type: 'caption', caption: { ...caption, provisional: 'yes' } }), null);
+  assert.equal(parseServerEvent({ type: 'caption-remove', ids: [1, '2'] }), null);
+  assert.deepEqual(parseServerEvent({ type: 'caption-remove', ids: [1] }), { type: 'caption-remove', ids: [1] });
+  assert.deepEqual(updateCaptionRecords([caption, { ...caption, id: 2 }], { type: 'caption-remove', ids: [1] }).map(row => row.id), [2]);
 });
 test('SRT exports Chinese and English with valid millisecond timestamps and explicit failed segments', () => {
   assert.equal(srtTimestamp(3_661_234), '01:01:01,234');

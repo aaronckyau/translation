@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { AudioStartupError, captureAudio, createAudioPipeline, prepareAudioContext, type AudioPipeline, type AudioSource } from './audio';
-import { mergeCaption, parseServerEvent, type AppConfig, type Caption, type SessionPhase } from '../shared/protocol';
+import { updateCaptionRecords, parseServerEvent, type AppConfig, type Caption, type SessionPhase } from '../shared/protocol';
 import { exportSrt } from '../shared/subtitles';
 import { appPath } from './paths';
 
@@ -166,7 +166,8 @@ export function App() {
             break;
           case 'interim': setInterim(message.english); break;
           case 'preview': setPreview(message.chinese ? { english: message.english, chinese: message.chinese } : null); break;
-          case 'caption': setCaptions(current => mergeCaption(current, message.caption)); break;
+          case 'caption':
+          case 'caption-remove': setCaptions(current => updateCaptionRecords(current, message)); break;
           case 'usage': setUsage({ audioSeconds: message.audioSeconds, estimatedUsd: message.estimatedUsd }); break;
           case 'error': setError(message.message); if (message.fatal) { intentionalStop.current = true; setPreview(null); void release(false); } break;
         }
@@ -272,7 +273,7 @@ export function App() {
           <div className="subtitle-toolbar"><label className="toggle"><input type="checkbox" checked={bilingual} onChange={e => setBilingual(e.target.checked)} /><span className="toggle-track" />中英雙語</label><label className="font-control"><span>字體</span><input type="range" min="22" max="46" value={fontSize} onChange={e => setFontSize(Number(e.target.value))} aria-label="字幕字體大小" /><span className="font-preview">Aa</span></label><button className="secondary-button" onClick={() => void openPip()} disabled={!pipAvailable || !!pipWindow || openingPip} title={pipAvailable ? '開啟置頂字幕視窗' : '浮動字幕需要支援的電腦版 Chrome／Edge'}><Icon name="popout" size={18} />{openingPip ? '正在開啟…' : pipWindow ? '浮動字幕已開啟' : '浮動字幕'}</button></div>
           {!pipAvailable && <p className="browser-note">目前瀏覽器未提供浮動字幕視窗，可在桌面版 Chrome／Edge 試用。</p>}
           <section className="transcript"><div className="section-heading"><div><h2>字幕紀錄 <span className="count">{captions.length}</span></h2><p>每一句，都可以回看。</p></div><button className="text-button" onClick={download} disabled={!captions.length || active}><Icon name="download" size={17} />下載字幕</button></div><div className="transcript-scroll" ref={transcriptContainer} onScroll={e => { const target = e.currentTarget; autoScroll.current = target.scrollHeight - target.scrollTop - target.clientHeight < 80; }}>
-            {!captions.length ? <div className="empty-transcript"><span className="empty-icon"><Icon name="wave" size={23} /></span><div><strong>這裡會留下你的字幕紀錄</strong><p>開始翻譯後，英文原文及中文翻譯會逐句顯示。</p></div></div> : captions.map(caption => <article className="caption-row" key={caption.id}><time>{elapsed(caption.startMs / 1000)}</time><div><p className={caption.translationState === 'done' ? '' : 'caption-status'}>{caption.translationState === 'done' ? caption.chinese : caption.translationState === 'error' ? '此句翻譯失敗，已保留英文原文。' : '翻譯中…'}</p>{bilingual && <p className="caption-english" lang="en">{caption.english}</p>}</div></article>)}</div>{!!captions.length && !active && <p className="retention-note">字幕只保留在本次網頁中。重新開始或重新整理前，請先下載。</p>}</section>
+            {!captions.length ? <div className="empty-transcript"><span className="empty-icon"><Icon name="wave" size={23} /></span><div><strong>這裡會留下你的字幕紀錄</strong><p>開始翻譯後，英文原文及中文翻譯會逐句顯示。</p></div></div> : captions.map(caption => <article className="caption-row" key={caption.id}><time>{elapsed(caption.startMs / 1000)}</time><div><p className={caption.translationState === 'done' ? '' : 'caption-status'}>{caption.provisional && <span className="caption-status">暫定 · </span>}{caption.translationState === 'done' ? caption.chinese : caption.translationState === 'error' ? '此句翻譯失敗，已保留英文原文。' : '翻譯中…'}</p>{bilingual && <p className="caption-english" lang="en">{caption.english}</p>}</div></article>)}</div>{!!captions.length && !active && <p className="retention-note">字幕只保留在本次網頁中。重新開始或重新整理前，請先下載。</p>}</section>
         </section>
 
         <aside className="control-panel"><div className="panel-heading"><span className="source-icon"><Icon name={source === 'meeting' ? 'meeting' : source === 'video' ? 'screen' : 'mic'} size={21} /></span><div><h2>{source === 'meeting' ? '電腦聲音' : source === 'video' ? '影片分頁音訊' : '麥克風'}</h2><p>{source === 'meeting' ? 'Teams、Zoom、YouTube' : source === 'video' ? '只翻譯指定分頁的聲音' : '翻譯麥克風收到的英文'}</p></div></div><details className="source-settings"><summary>更改聲音來源</summary><div className="source-options" role="radiogroup" aria-label="聲音來源">{modes.map(mode => <button key={mode.id} role="radio" aria-checked={source === mode.id} className={`source-option ${source === mode.id ? 'selected' : ''}`} disabled={active} onClick={() => setSource(mode.id)}><span className="source-icon"><Icon name={mode.icon} size={21} /></span><span><strong>{mode.name}</strong><small>{mode.detail}</small></span><span className="radio-dot">{source === mode.id && <span />}</span></button>)}</div></details>

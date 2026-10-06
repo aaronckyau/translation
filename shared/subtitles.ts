@@ -10,7 +10,7 @@ export function srtTimestamp(ms: number): string {
 
 export function exportSrt(captions: Caption[], bilingual: boolean): string {
   return captions.map((c, index) => {
-    const chinese = c.translationState === 'done' ? c.chinese : c.translationState === 'error' ? '［此句翻譯失敗］' : '［此句尚未完成翻譯］';
+    const chinese = (c.provisional ? '［暫定字幕］' : '') + (c.translationState === 'done' ? c.chinese : c.translationState === 'error' ? '［此句翻譯失敗］' : '［此句尚未完成翻譯］');
     const text = bilingual ? `${chinese}\n${c.english}` : chinese;
     return `${index + 1}\n${srtTimestamp(c.startMs)} --> ${srtTimestamp(Math.max(c.endMs, c.startMs + 500))}\n${text}\n`;
   }).join('\n');
