@@ -1,7 +1,7 @@
 import { config as loadEnv } from 'dotenv';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resolveApiKey } from './environment';
+import { resolveApiKey, validateNetworkAccessCode } from './environment';
 import { normalizeBasePath } from '../shared/paths';
 
 export const projectRoot = fileURLToPath(new URL('../', import.meta.url));
@@ -28,6 +28,4 @@ export const settings = {
   maxSessionMinutes: boundedNumber('MAX_SESSION_MINUTES', 120, 1, 480),
 };
 
-if (!['127.0.0.1', 'localhost', '::1'].includes(settings.host) && settings.accessCode.length < 16) {
-  throw new Error('Network hosting requires APP_ACCESS_CODE with at least 16 characters.');
-}
+validateNetworkAccessCode(settings.host, settings.accessCode, process.env.ALLOW_SHORT_ACCESS_CODE === 'true');

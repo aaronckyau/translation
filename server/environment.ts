@@ -9,3 +9,11 @@ export function resolveApiKey(...sources: ApiKeyEnvironment[]): string {
   }
   return '';
 }
+
+export function validateNetworkAccessCode(host: string, accessCode: string, allowShortCode = false): void {
+  if (['127.0.0.1', 'localhost', '::1'].includes(host)) return;
+  const minimumLength = allowShortCode ? 1 : 16;
+  if (!accessCode.trim() || accessCode.length < minimumLength) {
+    throw new Error(`Network hosting requires APP_ACCESS_CODE with at least ${minimumLength} characters.`);
+  }
+}

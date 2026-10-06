@@ -64,6 +64,8 @@ npm start
 
 1. 在 Node.js 主機執行 `npm ci`、`npm run build`、`npm start`。
 2. 設定 `HOST=0.0.0.0`、伺服器端 `GEMINI_API_KEY`，以及至少 16 字元的隨機 `APP_ACCESS_CODE`。對外綁定但沒有密碼時服務會拒絕啟動。
+
+   若管理員指定較短的使用密碼，需明確設定 `ALLOW_SHORT_ACCESS_CODE=true`；預設仍要求至少 16 字元，公開部署始終不可使用空白密碼。
 3. 使用 HTTPS 反向代理，支援 `/api/live` WebSocket Upgrade，並保留原始 Host。瀏覽器收音與浮動字幕需要 secure context。
 4. 非 API 頁面只提供建置檔案，`.env`、原始碼及私密檔案不會由正式服務提供。金鑰不會傳到瀏覽器。
 5. 透過共享使用密碼登入，cookie 為 HttpOnly／SameSite=Strict。這是私人試用版入口，未包含個人帳戶、付款、個人配額及多伺服器共享狀態。公開商業服務需要再實作這些功能。
