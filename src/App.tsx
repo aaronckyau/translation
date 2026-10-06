@@ -5,7 +5,7 @@ import { mergeCaption, parseServerEvent, type AppConfig, type Caption, type Sess
 import { exportSrt } from '../shared/subtitles';
 import { appPath } from './paths';
 
-type IconName = 'wave' | 'play' | 'stop' | 'screen' | 'meeting' | 'mic' | 'arrow' | 'popout' | 'download' | 'check' | 'close' | 'help';
+type IconName = 'wave' | 'play' | 'stop' | 'screen' | 'meeting' | 'mic' | 'arrow' | 'popout' | 'download' | 'check' | 'close';
 function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
   const paths: Record<IconName, React.ReactNode> = {
     wave: <path d="M4 14v-4m4 8V6m4 15V3m4 15V6m4 8v-4" />,
@@ -19,7 +19,6 @@ function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
     download: <path d="M12 3v12m-4-4 4 4 4-4M4 16v5h16v-5" />,
     check: <path d="m5 12 4 4L19 6" />,
     close: <path d="m6 6 12 12M18 6 6 18" />,
-    help: <><circle cx="12" cy="12" r="9" /><path d="M9.5 8.5a2.5 2.5 0 1 1 4 2.5c-1 .5-1.5 1-1.5 2M12 16v.1" /></>,
   };
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 }
@@ -47,7 +46,6 @@ export function App() {
   const [usage, setUsage] = useState({ audioSeconds: 0, estimatedUsd: 0 });
   const [level, setLevel] = useState(0);
   const [quiet, setQuiet] = useState(false);
-  const [help, setHelp] = useState(false);
   const [accessCode, setAccessCode] = useState('');
   const [loggingIn, setLoggingIn] = useState(false);
   const [pipWindow, setPipWindow] = useState<Window | null>(null);
@@ -57,7 +55,6 @@ export function App() {
   const intentionalStop = useRef(false);
   const stopRef = useRef<() => void>(() => {});
   const transcriptContainer = useRef<HTMLDivElement | null>(null);
-  const helpModal = useRef<HTMLElement | null>(null);
   const autoScroll = useRef(true);
   const active = ['connecting', 'live', 'reconnecting', 'finishing'].includes(phase);
   const canCapture = !!navigator.mediaDevices && window.isSecureContext;
@@ -86,22 +83,6 @@ export function App() {
     const container = transcriptContainer.current;
     if (captions.length && autoScroll.current && container) container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
   }, [captions]);
-  useEffect(() => {
-    if (!help) return;
-    const previous = document.activeElement as HTMLElement | null;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setHelp(false);
-      if (event.key === 'Tab') {
-        const buttons = helpModal.current?.querySelectorAll<HTMLButtonElement>('button');
-        const first = buttons?.[0];
-        const last = buttons?.[buttons.length - 1];
-        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
-        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
-      }
-    };
-    document.addEventListener('keydown', onKey);
-    return () => { document.removeEventListener('keydown', onKey); previous?.focus(); };
-  }, [help]);
   useEffect(() => () => { pipWindow?.close(); }, [pipWindow]);
 
   async function release(closeSocket: boolean) {
@@ -264,9 +245,7 @@ export function App() {
   );
 
   return <>
-    <header className="topbar"><a className="brand" href={appPath('')} aria-label="聲譯首頁"><span className="brand-icon"><Icon name="wave" size={25} /></span><span>聲譯<span className="brand-caption">讓理解，跟上聲音。</span></span></a><div className="top-actions"><span className="browser-label">瀏覽器開啟 · 免安裝</span><button className="text-button" onClick={() => setHelp(true)}><Icon name="help" size={18} />使用說明</button></div></header>
     <main>
-      <section className="hero"><div><div className="eyebrow"><span className="tiny-dot" />即時英文語音翻譯</div><h1>聽見英文。<br /><span>看懂每一句。</span></h1><p className="hero-description">影片、會議、現場對話。讓繁體中文字幕，<br className="desktop-break" />陪你跟上正在發生的內容。</p></div><div className="language-card" aria-label="英文翻譯為繁體中文"><div><span className="language-code">EN</span><span>英文語音</span></div><span className="language-arrow"><Icon name="arrow" size={26} /></span><div><span className="language-code zh">繁中</span><span>即時字幕</span></div><span className="language-note">聆聽 · 翻譯 · 理解</span></div></section>
 
       {configError && <div className="notice error-notice" role="alert">{configError}<button onClick={() => void refreshConfig()}>重試</button></div>}
       {config && !config.configured && <div className="notice setup-notice"><div className="notice-symbol">i</div><div><strong>翻譯服務尚未設定</strong><p>管理員完成 Gemini 連線設定後即可使用。</p></div><button className="text-button" onClick={() => void refreshConfig()}>重新檢查</button></div>}
@@ -294,6 +273,5 @@ export function App() {
       <section className="features"><div><span className="feature-symbol">✦</span><span><strong>跟著聲音，即時理解</strong><small>字幕稍遲於語音，延遲視網絡及內容而定。</small></span></div><div><Icon name="popout" size={21} /><span><strong>視窗切換，字幕仍在</strong><small>開啟浮動字幕，繼續看影片或參與會議。</small></span></div><div><Icon name="download" size={21} /><span><strong>需要時，再回看</strong><small>停止後下載 SRT 字幕，保留重點內容。</small></span></div></section>
     </main><footer><span>聲譯 <span className="footer-dot">·</span> 讓語言少一點距離。</span><span>音訊交由 Gemini 處理 · 伺服器不保存錄音及字幕</span></footer>
     {pipWindow && createPortal(<div className="pip-layout"><div className="pip-top"><span><Icon name="wave" size={16} />聲譯</span><span>{active ? '即時字幕' : '已停止'}</span></div>{subtitle}</div>, pipWindow.document.body)}
-    {help && <div className="modal-backdrop" onClick={() => setHelp(false)}><section className="help-modal" ref={helpModal} role="dialog" aria-modal="true" aria-labelledby="help-title" onClick={event => event.stopPropagation()}><div className="section-heading"><h2 id="help-title">開始使用聲譯</h2><button className="icon-button" aria-label="關閉說明" autoFocus onClick={() => setHelp(false)}><Icon name="close" /></button></div><ol><li><strong>播放英文內容</strong><p>在另一個分頁開啟影片，或加入 Zoom／Teams 會議。</p></li><li><strong>選擇來源並分享聲音</strong><p>網頁版會議請選「網上影片」；桌面版會議請選「桌面會議」。分享時一定要勾選音訊。</p></li><li><strong>開啟浮動字幕</strong><p>在支援的桌面瀏覽器中，字幕視窗會保持置頂。遇到全螢幕顯示問題，請改用一般視窗。</p></li><li><strong>停止及下載</strong><p>按停止後，等最後幾句完成，再下載字幕。時間戳記按收音時間估算，並非影片原始時間軸。</p></li></ol><p className="help-note">建議使用 Windows＋最新電腦版 Chrome／Edge。系統音訊及浮動視窗支援會因瀏覽器與裝置而異。字幕需要網絡連線，可能出現翻譯錯誤。</p><button className="primary-button" onClick={() => setHelp(false)}>開始使用</button></section></div>}
   </>;
 }
