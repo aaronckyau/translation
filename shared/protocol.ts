@@ -10,6 +10,7 @@ export interface Caption {
 export type ServerEvent =
   | { type: 'status'; phase: SessionPhase; message: string }
   | { type: 'interim'; english: string }
+  | { type: 'preview'; english: string; chinese: string }
   | { type: 'caption'; caption: Caption }
   | { type: 'error'; message: string; fatal: boolean }
   | { type: 'usage'; audioSeconds: number; estimatedUsd: number };
@@ -26,6 +27,7 @@ export function parseServerEvent(value: unknown): ServerEvent | null {
   const v = value as Record<string, unknown>;
   if (v.type === 'status' && ['connecting', 'live', 'reconnecting', 'finishing', 'stopped'].includes(String(v.phase)) && typeof v.message === 'string') return v as unknown as ServerEvent;
   if (v.type === 'interim' && typeof v.english === 'string') return v as unknown as ServerEvent;
+  if (v.type === 'preview' && typeof v.english === 'string' && typeof v.chinese === 'string' && v.english.length <= 6000 && v.chinese.length <= 6000) return v as unknown as ServerEvent;
   if (v.type === 'error' && typeof v.message === 'string' && typeof v.fatal === 'boolean') return v as unknown as ServerEvent;
   if (v.type === 'usage' && typeof v.audioSeconds === 'number' && Number.isFinite(v.audioSeconds) && typeof v.estimatedUsd === 'number' && Number.isFinite(v.estimatedUsd)) return v as unknown as ServerEvent;
   if (v.type === 'caption' && v.caption && typeof v.caption === 'object') {

@@ -104,7 +104,7 @@ ws.on('connection', client => {
       close: () => live.close(),
     };
   };
-  const session = new SubtitleSession(connect, createTranslator(ai, settings.translationModel), emit, () => { active.delete(session); client.close(1000, 'Session ended'); }, settings.maxSessionMinutes);
+  const session = new SubtitleSession(connect, createTranslator(ai, settings.translationModel), emit, () => { active.delete(session); client.close(1000, 'Session ended'); }, settings.maxSessionMinutes, createTranslator(ai, settings.translationModel, true));
   active.add(session);
   let bytesInWindow = 0;
   let windowStart = Date.now();

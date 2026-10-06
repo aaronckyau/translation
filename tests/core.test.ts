@@ -17,6 +17,8 @@ test('subtitle updates replace pending entries instead of duplicating or reorder
   assert.equal(rows[0]?.chinese, caption.chinese);
 });
 test('malformed provider events cannot enter subtitle state', () => {
+  assert.equal(parseServerEvent({ type: 'preview', english: 'source', chinese: 123 }), null);
+  assert.equal(parseServerEvent({ type: 'preview', english: 'source', chinese: '預覽' })?.type, 'preview');
   assert.equal(parseServerEvent({ type: 'caption', caption: { ...caption, endMs: -1 } }), null);
   assert.equal(parseServerEvent({ type: 'usage', audioSeconds: Infinity, estimatedUsd: 1 }), null);
   assert.equal(parseServerEvent({ type: 'status', phase: 'arbitrary', message: '' }), null);

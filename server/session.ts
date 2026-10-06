@@ -1,6 +1,7 @@
 import type { Caption, ServerEvent } from '../shared/protocol';
 import { providerError } from './security';
 import { TranslationQueue, type Translator } from './translation';
+import { PreviewTranslator } from './preview';
 
 export interface TranscriptMessage { interim?: string; final?: string; goAway?: boolean }
 export interface Transcriber { sendAudio(data: Buffer): void; endAudio(): void; close(): void }
@@ -11,6 +12,7 @@ export class SubtitleSession {
   private transcriber: Transcriber | null = null;
   private retiring = new Set<Transcriber>();
   private queue: TranslationQueue;
+  private preview: PreviewTranslator;
   private closed = false;
   private finishing = false;
   private connecting = false;
@@ -23,7 +25,6 @@ export class SubtitleSession {
   private translationInput = 0;
   private translationOutput = 0;
   private boundaryMs = 0;
-  private lastFlushMs = 0;
   private captionId = 0;
   private pending = new Map<number, Caption>();
   private lastAudioAt = Date.now();
@@ -38,8 +39,12 @@ export class SubtitleSession {
     private emit: (event: ServerEvent) => void,
     private onDone: () => void,
     maxMinutes = 120,
+    previewTranslate: Translator = translate,
   ) {
     this.queue = new TranslationQueue(translate, error => this.emit({ type: 'error', message: providerError(error), fatal: false }));
+    this.preview = new PreviewTranslator(previewTranslate, () => this.queue.recentContext,
+      (english, chinese) => this.emit({ type: 'preview', english, chinese }),
+      result => { this.translationInput += result.inputTokens; this.translationOutput += result.outputTokens; this.usage(); });
     this.monitor = setInterval(() => {
       if (!this.closed && !this.finishing && Date.now() - this.lastAudioAt > 30_000) this.fail('已停止收到音訊，請重新選擇聲音來源。');
       if (this.finishing && ((Date.now() - this.finishStartedAt > 2500 && !this.queue.busy) || Date.now() - this.finishStartedAt > 16_000)) this.complete();
@@ -122,20 +127,24 @@ export class SubtitleSession {
       this.bufferBytes += data.length;
       if (this.bufferBytes > 320_000) this.fail('翻譯連線未能及時恢復，請重新開始。');
     }
-    const ms = this.audioBytes / 32;
-    // Bound latency when a speaker continues without a natural pause.
-    if (ms - this.lastFlushMs > 6000) this.flush();
+    // Continuous speech gets previews instead of cutting the audio mid-word.
+    // Natural pauses and stop still finalize authoritative captions.
     if (Date.now() - this.lastUsageAt > 1000) { this.lastUsageAt = Date.now(); this.usage(); }
   }
   flush(): void {
     if (!this.transcriber || this.closed || this.finishing) return;
-    try { this.transcriber.endAudio(); this.lastFlushMs = this.audioBytes / 32; }
+    try { this.transcriber.endAudio(); }
     catch { this.fail('音訊傳送中斷，請重新開始。'); }
   }
   private message(message: TranscriptMessage): void {
-    if (message.interim?.trim()) this.emit({ type: 'interim', english: message.interim.trim().slice(0, 6000) });
+    if (message.interim?.trim()) {
+      const english = message.interim.trim().slice(0, 6000);
+      this.emit({ type: 'interim', english });
+      if (!this.finishing) this.preview.update(english);
+    }
     const english = message.final?.trim().slice(0, 6000);
     if (english) {
+      this.preview.reset();
       this.retries = 0;
       const endMs = this.audioBytes / 32;
       const caption: Caption = { id: ++this.captionId, english, chinese: '', startMs: this.boundaryMs, endMs, translationState: 'pending' };
@@ -162,6 +171,7 @@ export class SubtitleSession {
   finish(): void {
     if (this.closed || this.finishing) return;
     this.finishing = true;
+    this.preview.reset();
     this.finishStartedAt = Date.now();
     this.emit({ type: 'status', phase: 'finishing', message: '正在完成最後幾句字幕…' });
     try { this.transcriber?.endAudio(); } catch { /* Finish translated captions already received. */ }
@@ -186,6 +196,7 @@ export class SubtitleSession {
     for (const timer of this.timers) clearTimeout(timer);
     this.timers.clear();
     this.queue.close();
+    this.preview.close();
     const live = this.transcriber;
     this.transcriber = null;
     live?.close();

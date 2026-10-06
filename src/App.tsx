@@ -40,6 +40,7 @@ export function App() {
   const [status, setStatus] = useState('準備好就開始');
   const [captions, setCaptions] = useState<Caption[]>([]);
   const [interim, setInterim] = useState('');
+  const [preview, setPreview] = useState<{ english: string; chinese: string } | null>(null);
   const [error, setError] = useState('');
   const [bilingual, setBilingual] = useState(true);
   const [fontSize, setFontSize] = useState(30);
@@ -126,7 +127,7 @@ export function App() {
       const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}${appPath('api/live')}`);
       const resource: Resources = { streams, socket, pipeline: null, startingPipeline: false };
       resourceRef.current = resource;
-      setCaptions([]); setInterim(''); setUsage({ audioSeconds: 0, estimatedUsd: 0 }); autoScroll.current = true;
+      setCaptions([]); setInterim(''); setPreview(null); setUsage({ audioSeconds: 0, estimatedUsd: 0 }); autoScroll.current = true;
       let lastVoice = Date.now();
       let speechActive = false;
       let silentSamples = 0;
@@ -167,17 +168,19 @@ export function App() {
               }).catch(() => { setError('無法啟動收音，請檢查瀏覽器權限後重試。'); void stop(true); });
             }
             if (message.phase === 'finishing') { intentionalStop.current = true; void resource.pipeline?.stop(); streams.forEach(s => s.getTracks().forEach(t => t.stop())); }
-            if (message.phase === 'stopped') { intentionalStop.current = true; clearTimeout(connectTimeout); void release(false); setInterim(''); }
+            if (message.phase === 'stopped') { intentionalStop.current = true; clearTimeout(connectTimeout); void release(false); setInterim(''); setPreview(null); }
             break;
           case 'interim': setInterim(message.english); break;
+          case 'preview': setPreview(message.chinese ? { english: message.english, chinese: message.chinese } : null); break;
           case 'caption': setCaptions(current => mergeCaption(current, message.caption)); break;
           case 'usage': setUsage({ audioSeconds: message.audioSeconds, estimatedUsd: message.estimatedUsd }); break;
-          case 'error': setError(message.message); if (message.fatal) { intentionalStop.current = true; void release(false); } break;
+          case 'error': setError(message.message); if (message.fatal) { intentionalStop.current = true; setPreview(null); void release(false); } break;
         }
       };
       socket.onclose = () => {
         clearTimeout(connectTimeout);
         if (generation !== generationRef.current) return;
+        setPreview(null);
         if (!intentionalStop.current) setError('翻譯連線中斷。請檢查網絡、Gemini 設定及服務用量後重新開始。');
         intentionalStop.current = true;
         void release(false); setPhase('stopped'); setStatus('翻譯已停止'); setInterim('');
@@ -198,7 +201,7 @@ export function App() {
     intentionalStop.current = true;
     if (force || !resource?.pipeline) {
       generationRef.current++;
-      await release(true); setPhase('stopped'); setStatus('翻譯已停止'); setInterim('');
+      await release(true); setPhase('stopped'); setStatus('翻譯已停止'); setInterim(''); setPreview(null);
       setCaptions(current => current.map(c => c.translationState === 'pending' ? { ...c, translationState: 'error' } : c));
       return;
     }
@@ -254,9 +257,9 @@ export function App() {
 
   const subtitle = (
     <div className={`subtitle-content ${pipWindow ? 'has-pip' : ''}`} style={{ '--subtitle-size': `${fontSize}px` } as CSSProperties}>
-      <p className={`chinese ${latest ? '' : 'placeholder'}`}>{latest?.chinese || (active ? '聆聽中，中文字幕即將出現…' : '你的中文字幕，會在這裡出現。')}</p>
-      {bilingual && <p className="english" lang="en">{interim || latest?.english || (active ? 'Waiting for speech…' : '開始播放英文內容，我們會為你即時翻譯。')}</p>}
-      {pending && <span className="translating">正在翻譯下一句<span className="dots">…</span></span>}
+      <p className={`chinese ${preview || latest ? '' : 'placeholder'}`}>{preview?.chinese || latest?.chinese || (active ? '聆聽中，中文字幕即將出現…' : '你的中文字幕，會在這裡出現。')}</p>
+      {bilingual && <p className="english" lang="en">{interim || preview?.english || latest?.english || (active ? 'Waiting for speech…' : '開始播放英文內容，我們會為你即時翻譯。')}</p>}
+      {preview ? <span className="translating">即時預覽 · 會隨語句更新</span> : pending && <span className="translating">正在翻譯下一句<span className="dots">…</span></span>}
     </div>
   );
 
