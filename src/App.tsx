@@ -261,7 +261,7 @@ export function App() {
   );
 
   return <>
-    <header className="topbar"><a className="brand" href="/" aria-label="聲譯首頁"><span className="brand-icon"><Icon name="wave" size={25} /></span><span>聲譯<span className="brand-caption">讓理解，跟上聲音。</span></span></a><div className="top-actions"><span className="browser-label">瀏覽器開啟 · 免安裝</span><button className="text-button" onClick={() => setHelp(true)}><Icon name="help" size={18} />使用說明</button></div></header>
+    <header className="topbar"><a className="brand" href={appPath('')} aria-label="聲譯首頁"><span className="brand-icon"><Icon name="wave" size={25} /></span><span>聲譯<span className="brand-caption">讓理解，跟上聲音。</span></span></a><div className="top-actions"><span className="browser-label">瀏覽器開啟 · 免安裝</span><button className="text-button" onClick={() => setHelp(true)}><Icon name="help" size={18} />使用說明</button></div></header>
     <main>
       <section className="hero"><div><div className="eyebrow"><span className="tiny-dot" />即時英文語音翻譯</div><h1>聽見英文。<br /><span>看懂每一句。</span></h1><p className="hero-description">影片、會議、現場對話。讓繁體中文字幕，<br className="desktop-break" />陪你跟上正在發生的內容。</p></div><div className="language-card" aria-label="英文翻譯為繁體中文"><div><span className="language-code">EN</span><span>英文語音</span></div><span className="language-arrow"><Icon name="arrow" size={26} /></span><div><span className="language-code zh">繁中</span><span>即時字幕</span></div><span className="language-note">聆聽 · 翻譯 · 理解</span></div></section>
 
