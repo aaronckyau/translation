@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { SubtitleSession, type GatewayCallbacks, type Transcriber } from '../server/session';
 import type { ServerEvent } from '../shared/protocol';
 import type { Translator } from '../server/translation';
+import { exportSrt } from '../shared/subtitles';
 
 const translator: Translator = async english => ({ text: `翻譯：${english}`, inputTokens: 100, outputTokens: 50 });
 function fixture(translate = translator) {
@@ -19,6 +20,66 @@ function fixture(translate = translator) {
   }, translate, event => events.push(event), () => { done = true; });
   return { session, callbacks, events, audio, get closes() { return closes; }, get ends() { return ends; }, get done() { return done; } };
 }
+
+test('a cumulative live paragraph previews only the current one or two sentences', async () => {
+  const requested: string[] = [];
+  const f = fixture(async english => { requested.push(english); return translator(english, [], new AbortController().signal); });
+  try {
+    await f.session.start();
+    f.callbacks[0]!.message({ interim: 'First sentence. Second sentence. Third sentence. Fourth sentence. Fifth sentence is ongoing' });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.deepEqual(requested, ['Fifth sentence is ongoing']);
+    assert.ok(f.events.some(event => event.type === 'interim' && event.english === 'Fifth sentence is ongoing'));
+    assert.ok(f.events.some(event => event.type === 'preview' && event.english === 'Fifth sentence is ongoing'));
+    assert.equal(f.ends, 0);
+  } finally { f.session.dispose(); }
+});
+
+test('a long final paragraph becomes ordered short captions with the full transcript retained', async () => {
+  const f = fixture();
+  try {
+    await f.session.start();
+    for (let i = 0; i < 100; i++) f.session.audio(Buffer.alloc(3200));
+    const source = Array.from({ length: 30 }, (_, i) => `This is sentence ${i}.`).join(' ');
+    f.callbacks[0]!.message({ final: source });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    const captions = f.events.flatMap(event => event.type === 'caption' && event.caption.translationState === 'done' ? [event.caption] : []);
+    assert.equal(captions.length, 15, 'a single long provider result must not overflow the translation queue');
+    assert.equal(captions.map(caption => caption.english).join(' '), source);
+    const srt = exportSrt(captions, true);
+    for (const caption of captions) assert.ok(srt.includes(caption.english));
+    assert.deepEqual(captions.map(caption => caption.id), Array.from({ length: 15 }, (_, i) => i + 1));
+    assert.equal(captions[0]!.startMs, 0);
+    assert.equal(captions.at(-1)!.endMs, 10_000);
+    captions.forEach((caption, i) => {
+      assert.equal(caption.english.split('.').filter(value => value.trim()).length, 2);
+      assert.ok(caption.endMs > caption.startMs);
+      if (i) assert.equal(caption.startMs, captions[i - 1]!.endMs);
+    });
+  } finally { f.session.dispose(); }
+});
+
+test('advancing to a new sentence group cancels the previous preview and ignores its late response', async () => {
+  let resolveOld: ((result: { text: string; inputTokens: number; outputTokens: number }) => void) | undefined;
+  let aborted = false;
+  const f = fixture(async (english, _context, signal) => {
+    if (english === 'First sentence. Second sentence.') {
+      signal.addEventListener('abort', () => { aborted = true; }, { once: true });
+      return new Promise(resolve => { resolveOld = resolve; });
+    }
+    return { text: '這是第三句。', inputTokens: 10, outputTokens: 8 };
+  });
+  try {
+    await f.session.start();
+    f.callbacks[0]!.message({ interim: 'First sentence. Second sentence.' });
+    f.callbacks[0]!.message({ interim: 'First sentence. Second sentence. This is the third sentence' });
+    assert.equal(aborted, true);
+    resolveOld!({ text: '過時的前兩句', inputTokens: 10, outputTokens: 8 });
+    await new Promise(resolve => setTimeout(resolve, 1250));
+    assert.equal(f.events.some(event => event.type === 'preview' && event.chinese === '過時的前兩句'), false);
+    assert.ok(f.events.some(event => event.type === 'preview' && event.chinese === '這是第三句。'));
+  } finally { f.session.dispose(); }
+});
 
 test('real-time transcript events produce one pending then one translated subtitle and usage', async () => {
   const f = fixture();

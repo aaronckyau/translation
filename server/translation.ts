@@ -28,7 +28,7 @@ export function createTranslator(ai: GoogleGenAI, model: string, preview = false
 
 // Serial execution preserves subtitle order and keeps context bounded.
 export class TranslationQueue {
-  private pending: Array<{ english: string; done: (result: TranslationResult | null) => void }> = [];
+  private pending: Array<Array<{ english: string; done: (result: TranslationResult | null) => void }>> = [];
   private running = false;
   private closed = false;
   private context: string[] = [];
@@ -36,8 +36,12 @@ export class TranslationQueue {
   constructor(private translate: Translator, private onError: (error: unknown) => void) {}
 
   add(english: string, done: (result: TranslationResult | null) => void): boolean {
+    return this.addBatch([{ english, done }]);
+  }
+  // Capacity counts provider results, so splitting one result cannot drop its tail.
+  addBatch(jobs: Array<{ english: string; done: (result: TranslationResult | null) => void }>): boolean {
     if (this.closed || this.pending.length >= 12) return false;
-    this.pending.push({ english, done });
+    this.pending.push(jobs);
     void this.pump();
     return true;
   }
@@ -53,17 +57,20 @@ export class TranslationQueue {
     this.running = true;
     try {
       while (this.pending.length && !this.closed) {
-        const job = this.pending.shift()!;
-        const controller = new AbortController();
-        this.currentAbort = controller;
-        const timeout = setTimeout(() => controller.abort(), 12_000);
-        try {
-          const result = await this.translate(job.english, this.context, controller.signal);
-          if (!this.closed) job.done(result);
-        } catch (error) {
-          if (!this.closed) { job.done(null); this.onError(error); }
-        } finally { clearTimeout(timeout); this.currentAbort = null; }
-        this.context = [...this.context, job.english].slice(-4).map(text => text.slice(-600));
+        const batch = this.pending.shift()!;
+        for (const job of batch) {
+          if (this.closed) break;
+          const controller = new AbortController();
+          this.currentAbort = controller;
+          const timeout = setTimeout(() => controller.abort(), 12_000);
+          try {
+            const result = await this.translate(job.english, this.context, controller.signal);
+            if (!this.closed) job.done(result);
+          } catch (error) {
+            if (!this.closed) { job.done(null); this.onError(error); }
+          } finally { clearTimeout(timeout); this.currentAbort = null; }
+          this.context = [...this.context, job.english].slice(-4).map(text => text.slice(-600));
+        }
       }
     } finally { this.running = false; }
   }

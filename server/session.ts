@@ -2,6 +2,7 @@ import type { Caption, ServerEvent } from '../shared/protocol';
 import { providerError } from './security';
 import { TranslationQueue, type Translator } from './translation';
 import { PreviewTranslator } from './preview';
+import { sentenceGroups } from '../shared/sentences';
 
 export interface TranscriptMessage { interim?: string; final?: string; goAway?: boolean }
 export interface Transcriber { sendAudio(data: Buffer): void; endAudio(): void; close(): void }
@@ -26,6 +27,7 @@ export class SubtitleSession {
   private translationOutput = 0;
   private boundaryMs = 0;
   private captionId = 0;
+  private previewGroupIndex = 0;
   private pending = new Map<number, Caption>();
   private lastAudioAt = Date.now();
   private timers = new Set<ReturnType<typeof setTimeout>>();
@@ -138,30 +140,50 @@ export class SubtitleSession {
   }
   private message(message: TranscriptMessage): void {
     if (message.interim?.trim()) {
-      const english = message.interim.trim().slice(0, 6000);
+      const groups = sentenceGroups(message.interim.trim().slice(0, 6000));
+      const english = groups.at(-1)!;
+      if (this.previewGroupIndex !== groups.length - 1) this.preview.reset();
+      this.previewGroupIndex = groups.length - 1;
       this.emit({ type: 'interim', english });
       if (!this.finishing) this.preview.update(english);
     }
     const english = message.final?.trim().slice(0, 6000);
     if (english) {
       this.preview.reset();
+      this.previewGroupIndex = 0;
       this.retries = 0;
       const endMs = this.audioBytes / 32;
-      const caption: Caption = { id: ++this.captionId, english, chinese: '', startMs: this.boundaryMs, endMs, translationState: 'pending' };
+      const groups = sentenceGroups(english);
+      const duration = endMs - this.boundaryMs;
+      const totalLength = groups.reduce((total, group) => total + group.length, 0);
+      let consumed = 0;
+      let startMs = this.boundaryMs;
+      // Provider timestamps cover the whole result; distribute its duration by text length.
+      const captions: Caption[] = groups.map((group, index) => {
+        consumed += group.length;
+        const groupEnd = index === groups.length - 1 ? endMs : this.boundaryMs + duration * consumed / totalLength;
+        const caption: Caption = { id: ++this.captionId, english: group, chinese: '', startMs, endMs: groupEnd, translationState: 'pending' };
+        startMs = groupEnd;
+        return caption;
+      });
       this.boundaryMs = endMs;
       this.transcriptTokens += Math.ceil(english.length / 4);
       this.emit({ type: 'interim', english: '' });
-      this.emit({ type: 'caption', caption });
-      this.pending.set(caption.id, caption);
-      const accepted = this.queue.add(english, result => {
+      for (const caption of captions) {
+        this.emit({ type: 'caption', caption });
+        this.pending.set(caption.id, caption);
+      }
+      const accepted = this.queue.addBatch(captions.map(caption => ({ english: caption.english, done: result => {
         this.pending.delete(caption.id);
         if (result) { this.translationInput += result.inputTokens; this.translationOutput += result.outputTokens; }
         this.emit({ type: 'caption', caption: { ...caption, chinese: result?.text || '', translationState: result ? 'done' : 'error' } });
         this.usage();
-      });
+      } })));
       if (!accepted) {
-        this.pending.delete(caption.id);
-        this.emit({ type: 'caption', caption: { ...caption, translationState: 'error' } });
+        for (const caption of captions) {
+          this.pending.delete(caption.id);
+          this.emit({ type: 'caption', caption: { ...caption, translationState: 'error' } });
+        }
         this.emit({ type: 'error', message: '翻譯速度暫時跟不上語音，此句保留英文。', fatal: false });
       }
     }
